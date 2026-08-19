@@ -11,6 +11,7 @@ Opcional:
   --test-event-code TEST12345   # para conferir no Test Events do Events Manager antes de valer
   --dry-run                     # so mostra o payload, nao envia nada
   --batch-size 50                # eventos por requisicao (padrao 50)
+  --force-now                   # sobrescreve event_time com o horario atual (API rejeita eventos com mais de 7 dias)
 """
 
 import argparse
@@ -43,7 +44,7 @@ def iso_to_unix(event_time: str) -> int:
     return int(dt.astimezone(timezone.utc).timestamp())
 
 
-def row_to_event(row: dict) -> dict | None:
+def row_to_event(row: dict, force_now: bool = False) -> dict | None:
     event_name = (row.get("event_name") or "").strip()
     event_time = (row.get("event_time") or "").strip()
     if not event_name or not event_time:
@@ -71,7 +72,7 @@ def row_to_event(row: dict) -> dict | None:
 
     event = {
         "event_name": event_name,
-        "event_time": iso_to_unix(event_time),
+        "event_time": int(time.time()) if force_now else iso_to_unix(event_time),
         "action_source": "other",
         "user_data": user_data,
     }
@@ -84,7 +85,7 @@ def row_to_event(row: dict) -> dict | None:
     return event
 
 
-def load_events(csv_path: str) -> list[dict]:
+def load_events(csv_path: str, force_now: bool = False) -> list[dict]:
     events = []
     with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -98,7 +99,7 @@ def load_events(csv_path: str) -> list[dict]:
         reader.fieldnames = renamed
 
         for raw_row in reader:
-            event = row_to_event(raw_row)
+            event = row_to_event(raw_row, force_now=force_now)
             if event:
                 events.append(event)
     return events
@@ -131,6 +132,11 @@ def main():
     parser.add_argument("--test-event-code", default=None)
     parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--force-now",
+        action="store_true",
+        help="Sobrescreve event_time com o horario atual (necessario pois a API rejeita eventos com mais de 7 dias)",
+    )
     args = parser.parse_args()
 
     import os
@@ -144,7 +150,7 @@ def main():
             "ou rode com --dry-run para so ver o payload."
         )
 
-    events = load_events(args.csv_path)
+    events = load_events(args.csv_path, force_now=args.force_now)
     print(f"{len(events)} eventos prontos para envio.")
 
     if args.dry_run:
