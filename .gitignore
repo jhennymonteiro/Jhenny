@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+.estado_leads_enviados.json
+.env
