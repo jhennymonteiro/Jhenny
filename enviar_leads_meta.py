@@ -23,6 +23,7 @@ import io
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import planilha_para_csv as transformador
@@ -30,6 +31,10 @@ import enviar_eventos_capi as capi
 
 ESTADO_PATH = Path(__file__).parent / ".estado_leads_enviados.json"
 CSV_SAIDA_PATH = Path(__file__).parent / "Controle_de_Leads_-_SkinPet_adaptado.csv"
+
+# O Meta rejeita o lote inteiro se qualquer evento for mais velho que isso
+# (regra da Conversions API para eventos enviados via servidor).
+JANELA_MAX_SEGUNDOS = 7 * 24 * 60 * 60
 
 
 def chave_linha(linha: dict) -> str:
@@ -87,17 +92,32 @@ def main():
     print(f"{len(todas_linhas)} linhas na planilha -> CSV atualizado em {CSV_SAIDA_PATH}", file=sys.stderr)
 
     estado = set() if args.reenviar_tudo else carregar_estado()
+    agora = time.time()
     linhas_novas = []
+    linhas_antigas_demais = 0
     chaves_novas = set()
+    chaves_antigas = set()
     for linha in todas_linhas:
         chave = chave_linha(linha)
         if chave in estado:
             continue
+        idade_segundos = agora - capi.iso_to_unix(linha["event_time"])
+        if idade_segundos > JANELA_MAX_SEGUNDOS:
+            # O Meta so aceita eventos server-side de ate 7 dias atras. Marca como
+            # "visto" pra nao ficar tentando de novo a cada execucao, mas nao envia.
+            linhas_antigas_demais += 1
+            chaves_antigas.add(chave)
+            continue
         linhas_novas.append(linha)
         chaves_novas.add(chave)
 
-    print(f"{len(linhas_novas)} eventos novos desde a ultima execucao.", file=sys.stderr)
+    if linhas_antigas_demais:
+        print(f"{linhas_antigas_demais} linhas com mais de 7 dias -> Meta nao aceita via CAPI, nao serao enviadas (fora do funil automatico).", file=sys.stderr)
+    print(f"{len(linhas_novas)} eventos novos (dentro da janela de 7 dias) desde a ultima execucao.", file=sys.stderr)
+
     if not linhas_novas:
+        if chaves_antigas and not args.dry_run:
+            salvar_estado(estado | chaves_antigas)
         return
 
     eventos = [capi.row_to_event(linha) for linha in linhas_novas]
@@ -126,9 +146,10 @@ def main():
     # So marca como enviado o que nao deu erro generalizado (aqui, tudo-ou-nada por simplicidade:
     # se o lote inteiro falhou, essas linhas nao entram no estado e serao tentadas de novo na proxima).
     if total_error == 0:
-        salvar_estado(estado | chaves_novas)
+        salvar_estado(estado | chaves_novas | chaves_antigas)
     else:
-        print("Houve erro(s) de envio: estado NAO foi atualizado, essas linhas serao tentadas novamente na proxima execucao.", file=sys.stderr)
+        print("Houve erro(s) de envio: estado NAO foi atualizado para as linhas com erro, serao tentadas novamente na proxima execucao.", file=sys.stderr)
+        salvar_estado(estado | chaves_antigas)
 
 
 if __name__ == "__main__":
