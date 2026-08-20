@@ -37,6 +37,7 @@ from pathlib import Path
 
 import planilha_para_csv as transformador
 import enviar_eventos_capi as capi
+import credenciais_meta
 
 ESTADO_PATH = Path(__file__).parent / ".estado_leads_enviados.json"
 CSV_SAIDA_PATH = Path(__file__).parent / "Controle_de_Leads_-_SkinPet_adaptado.csv"
@@ -71,6 +72,8 @@ def main():
     parser.add_argument("--sheet-url", default=None, help="URL da planilha (padrao: planilha da SkinPet)")
     parser.add_argument("--pixel-id", default=None)
     parser.add_argument("--access-token", default=None)
+    parser.add_argument("--credenciais-sheet-url", default=None, help="Planilha com o Access Token (padrao: planilha de credenciais da SkinPet)")
+    parser.add_argument("--sem-buscar-credenciais", action="store_true", help="Nao busca credenciais na planilha, so usa --pixel-id/--access-token/variaveis de ambiente")
     parser.add_argument("--test-event-code", default=None)
     parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--dry-run", action="store_true")
@@ -80,8 +83,16 @@ def main():
 
     pixel_id = args.pixel_id or os.environ.get("META_PIXEL_ID")
     access_token = args.access_token or os.environ.get("META_ACCESS_TOKEN")
+    if not (pixel_id and access_token) and not args.dry_run and not args.marcar_tudo_enviado and not args.sem_buscar_credenciais:
+        print("Credenciais nao veio por argumento/env, buscando na planilha de credenciais...", file=sys.stderr)
+        try:
+            pixel_id_planilha, access_token_planilha = credenciais_meta.buscar_credenciais(args.credenciais_sheet_url)
+            pixel_id = pixel_id or pixel_id_planilha
+            access_token = access_token or access_token_planilha
+        except Exception as e:
+            print(f"Nao consegui buscar credenciais na planilha: {e}", file=sys.stderr)
     if not args.dry_run and not args.marcar_tudo_enviado and not (pixel_id and access_token):
-        sys.exit("Faltam credenciais: defina META_PIXEL_ID e META_ACCESS_TOKEN, ou rode com --dry-run.")
+        sys.exit("Faltam credenciais: defina META_PIXEL_ID e META_ACCESS_TOKEN, use --pixel-id/--access-token, ou rode com --dry-run.")
 
     if args.sheet_url:
         sheet_id, gid = transformador.sheet_id_and_gid_from_url(args.sheet_url)
