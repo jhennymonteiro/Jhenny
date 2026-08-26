@@ -2,11 +2,13 @@
 """
 Pipeline completo: planilha do Google Sheets -> CSV adaptado -> envio pro Meta (CAPI).
 
-So envia eventos novos: a identidade de um evento e (telefone + tipo de evento
-Lead/Purchase), nao a data. Isso significa que cada pessoa gera no maximo um
-"Lead" e um "Purchase" ao longo do tempo, e um evento ja marcado como enviado
-no estado local nunca e reenviado, mesmo que a linha na planilha mude de data
-ou valor depois.
+Fonte dos eventos: aba HISTÓRICO (log de movimentacao de fase, uma linha por
+transicao). So duas transicoes viram evento: a primeira entrada do lead
+("Fase anterior" = "Sem fase") dispara Lead, e o fechamento do negocio
+("nova fase" = "Negocio Fechado") dispara Purchase. Transicoes intermediarias
+(Conexao, FollowUp, Oportunidade, Negocio Perdido) nao geram nada. A
+identidade do evento e telefone + tipo + data/hora original da transicao,
+entao rodar o pipeline de novo nunca reenvia o mesmo evento duas vezes.
 
 O Meta rejeita eventos de servidor com mais de 7 dias. Quando uma linha nova
 (ainda nao enviada) tem a data de registro mais antiga que isso -- por exemplo
@@ -48,10 +50,11 @@ JANELA_MAX_SEGUNDOS = 7 * 24 * 60 * 60
 
 
 def chave_linha(linha: dict) -> str:
-    """Identidade do evento: telefone + tipo (Lead/Purchase). Nao inclui data
-    nem valor, entao mudar a data ou o valor de uma linha ja enviada nao gera
-    reenvio, e a mesma pessoa nunca recebe dois eventos do mesmo tipo."""
-    base = "|".join([linha.get("phone.2", ""), linha.get("event_name", "")])
+    """Identidade do evento: telefone + tipo + data/hora original da transicao
+    no HISTORICO. Usa o event_time ORIGINAL (antes de qualquer reescrita pra
+    'agora' por causa da janela de 7 dias do Meta), entao rodar o pipeline de
+    novo nunca reenvia a mesma linha do HISTORICO duas vezes."""
+    base = "|".join([linha.get("phone.2", ""), linha.get("event_name", ""), linha.get("event_time", "")])
     return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
 
@@ -100,12 +103,15 @@ def main():
         sheet_id, gid = transformador.DEFAULT_SHEET_ID, transformador.DEFAULT_GID
 
     print("Baixando planilha...", file=sys.stderr)
-    conteudo_csv = transformador.baixar_planilha_csv(sheet_id, gid)
-    reader = csv.DictReader(io.StringIO(conteudo_csv))
+    conteudo_principal = transformador.baixar_planilha_csv(sheet_id, gid)
+    mapa_valores = transformador.construir_mapa_valores(conteudo_principal)
+
+    conteudo_historico = transformador.baixar_aba_por_nome(sheet_id, transformador.ABA_HISTORICO)
+    reader = csv.DictReader(io.StringIO(conteudo_historico))
 
     todas_linhas = []
     for linha in reader:
-        resultado = transformador.transformar_linha(linha)
+        resultado = transformador.transformar_linha_historico(linha, mapa_valores)
         if resultado:
             todas_linhas.append(resultado)
 

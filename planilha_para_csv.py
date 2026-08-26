@@ -3,6 +3,11 @@
 Baixa a planilha de Leads da SkinPet (Google Sheets) e transforma no CSV
 adaptado que o Meta espera (mesmo formato de Controle_de_Leads_-_SkinPet_adaptado.csv).
 
+Fonte dos eventos: aba HISTÓRICO (log de movimentação de fase de cada lead,
+uma linha por transição: Data da Alteração, Nome, WhatsApp, Fase anterior,
+nova fase). O valor da venda não está no HISTÓRICO, entao e' buscado na aba
+principal (SkinPet) cruzando pelo WhatsApp.
+
 Uso:
   python3 planilha_para_csv.py > Controle_de_Leads_-_SkinPet_adaptado.csv
   python3 planilha_para_csv.py --sheet-url "https://docs.google.com/spreadsheets/d/XXX/edit#gid=0" -o saida.csv
@@ -16,11 +21,13 @@ import csv
 import io
 import re
 import sys
+import urllib.parse
 import urllib.request
 from datetime import datetime
 
 DEFAULT_SHEET_ID = "1kYnu0PDKn9oIOOQqYi2oN4qCt9C-da0sS2P4HuXBbTE"
 DEFAULT_GID = "0"
+ABA_HISTORICO = "HISTÓRICO"
 
 COLUNAS_SAIDA = [
     "email", "email", "email",
@@ -45,6 +52,14 @@ def sheet_id_and_gid_from_url(url: str) -> tuple[str, str]:
 
 def baixar_planilha_csv(sheet_id: str, gid: str) -> str:
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+    with urllib.request.urlopen(url) as response:
+        return response.read().decode("utf-8")
+
+
+def baixar_aba_por_nome(sheet_id: str, nome_aba: str) -> str:
+    """Baixa uma aba pelo nome (nao precisa saber o gid)."""
+    nome_url = urllib.parse.quote(nome_aba)
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={nome_url}"
     with urllib.request.urlopen(url) as response:
         return response.read().decode("utf-8")
 
@@ -121,6 +136,62 @@ def transformar_linha(linha: dict) -> dict | None:
     }
 
 
+def construir_mapa_valores(conteudo_csv_principal: str) -> dict[str, str]:
+    """Le a aba principal e monta {telefone_normalizado: valor_estimado}."""
+    reader = csv.DictReader(io.StringIO(conteudo_csv_principal))
+    mapa = {}
+    for linha in reader:
+        whatsapp = (linha.get("WhatsApp") or "").strip()
+        valor = (linha.get("Valor estimado") or "").strip()
+        if not whatsapp:
+            continue
+        telefone = normalizar_telefone(whatsapp)
+        mapa[telefone] = parse_valor(valor) if valor else ""
+    return mapa
+
+
+FASE_SEM_FASE = "Sem fase"
+
+
+def transformar_linha_historico(linha: dict, mapa_valores: dict[str, str]) -> dict | None:
+    nome = (linha.get("Nome") or "").strip()
+    whatsapp = (linha.get("WhatsApp") or "").strip()
+    fase_anterior = (linha.get("Fase anterior") or "").strip()
+    nova_fase = (linha.get("nova fase") or "").strip()
+    data_alteracao = (linha.get("Data da Alteração") or "").strip()
+
+    if not nome or not whatsapp or not nova_fase or not data_alteracao:
+        return None
+
+    # So dispara evento na primeira entrada (Lead) e no fechamento do negocio
+    # (Purchase). Transicoes intermediarias (Conexao, FollowUp, Oportunidade,
+    # Negocio Perdido) nao geram evento nenhum.
+    if nova_fase == FASE_NEGOCIO_FECHADO:
+        event_name = "Purchase"
+    elif fase_anterior == FASE_SEM_FASE or not fase_anterior:
+        event_name = "Lead"
+    else:
+        return None
+
+    fn, ln = separar_nome(nome)
+    telefone = normalizar_telefone(whatsapp)
+    ddd_numero = telefone[2:]
+    valor = mapa_valores.get(telefone, "")
+
+    return {
+        "email": "", "email.1": "", "email.2": "",
+        "phone": f"+55 ({ddd_numero[:2]}) {ddd_numero[2:7]}-{ddd_numero[7:]}",
+        "phone.1": f"55-({ddd_numero[:2]})-{ddd_numero[2:7]}-{ddd_numero[7:]}",
+        "phone.2": f"+{telefone}",
+        "madid": "", "fn": fn, "ln": ln, "zip": "", "ct": "", "st": "",
+        "country": "BR", "dob": "", "doby": "", "gen": "", "age": "",
+        "event_name": event_name,
+        "event_time": parse_data(data_alteracao),
+        "value": valor,
+        "currency": "BRL" if valor else "",
+    }
+
+
 def gerar_csv(linhas_transformadas: list[dict]) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -144,13 +215,16 @@ def main():
     else:
         sheet_id, gid = DEFAULT_SHEET_ID, DEFAULT_GID
 
-    conteudo_csv = baixar_planilha_csv(sheet_id, gid)
-    reader = csv.DictReader(io.StringIO(conteudo_csv))
+    conteudo_principal = baixar_planilha_csv(sheet_id, gid)
+    mapa_valores = construir_mapa_valores(conteudo_principal)
+
+    conteudo_historico = baixar_aba_por_nome(sheet_id, ABA_HISTORICO)
+    reader = csv.DictReader(io.StringIO(conteudo_historico))
 
     linhas_transformadas = []
     ignoradas = 0
     for linha in reader:
-        resultado = transformar_linha(linha)
+        resultado = transformar_linha_historico(linha, mapa_valores)
         if resultado is None:
             ignoradas += 1
             continue
