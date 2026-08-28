@@ -2,13 +2,18 @@
 """
 Pipeline completo: planilha do Google Sheets -> CSV adaptado -> envio pro Meta (CAPI).
 
-Fonte dos eventos: aba HISTÓRICO (log de movimentacao de fase, uma linha por
-transicao). So duas transicoes viram evento: a primeira entrada do lead
-("Fase anterior" = "Sem fase") dispara Lead, e o fechamento do negocio
+Fonte principal dos eventos: aba HISTÓRICO (log de movimentacao de fase, uma
+linha por transicao). So duas transicoes viram evento: a primeira entrada do
+lead ("Fase anterior" = "Sem fase") dispara Lead, e o fechamento do negocio
 ("nova fase" = "Negocio Fechado") dispara Purchase. Transicoes intermediarias
-(Conexao, FollowUp, Oportunidade, Negocio Perdido) nao geram nada. A
-identidade do evento e telefone + tipo + data/hora original da transicao,
-entao rodar o pipeline de novo nunca reenvia o mesmo evento duas vezes.
+(Conexao, FollowUp, Oportunidade, Negocio Perdido) nao geram nada.
+
+Rede de seguranca: a aba principal (SkinPet) tambem e' varrida com a mesma
+regra (Fase atual == "Negocio Fechado" -> Purchase, qualquer outra fase ->
+Lead), pra pegar leads/vendas que o script de HISTORICO deixou passar (por
+bug, edicao em massa, etc). A identidade do evento e' so telefone + tipo
+(Lead/Purchase) -- nao importa qual das duas fontes encontrou primeiro, cada
+pessoa gera no maximo um Lead e um Purchase na vida toda, nunca duplicado.
 
 O Meta rejeita eventos de servidor com mais de 7 dias. Quando uma linha nova
 (ainda nao enviada) tem a data de registro mais antiga que isso -- por exemplo
@@ -50,11 +55,10 @@ JANELA_MAX_SEGUNDOS = 7 * 24 * 60 * 60
 
 
 def chave_linha(linha: dict) -> str:
-    """Identidade do evento: telefone + tipo + data/hora original da transicao
-    no HISTORICO. Usa o event_time ORIGINAL (antes de qualquer reescrita pra
-    'agora' por causa da janela de 7 dias do Meta), entao rodar o pipeline de
-    novo nunca reenvia a mesma linha do HISTORICO duas vezes."""
-    base = "|".join([linha.get("phone.2", ""), linha.get("event_name", ""), linha.get("event_time", "")])
+    """Identidade do evento: telefone + tipo (Lead/Purchase). Nao inclui data
+    nem valor, entao a mesma pessoa nunca recebe dois eventos do mesmo tipo,
+    venha o evento do HISTORICO ou da rede de seguranca (aba principal)."""
+    base = "|".join([linha.get("phone.2", ""), linha.get("event_name", "")])
     return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
 
@@ -107,13 +111,26 @@ def main():
     mapa_valores = transformador.construir_mapa_valores(conteudo_principal)
 
     conteudo_historico = transformador.baixar_aba_por_nome(sheet_id, transformador.ABA_HISTORICO)
-    reader = csv.DictReader(io.StringIO(conteudo_historico))
+    reader_historico = csv.DictReader(io.StringIO(conteudo_historico))
 
-    todas_linhas = []
-    for linha in reader:
+    # chave -> linha. HISTORICO primeiro (mais preciso, data real da transicao);
+    # a rede de seguranca (aba principal) so preenche o que faltar.
+    linhas_por_chave: dict[str, dict] = {}
+    for linha in reader_historico:
         resultado = transformador.transformar_linha_historico(linha, mapa_valores)
         if resultado:
-            todas_linhas.append(resultado)
+            linhas_por_chave.setdefault(chave_linha(resultado), resultado)
+
+    linhas_historico = len(linhas_por_chave)
+
+    reader_principal = csv.DictReader(io.StringIO(conteudo_principal))
+    for linha in reader_principal:
+        resultado = transformador.transformar_linha(linha)
+        if resultado:
+            linhas_por_chave.setdefault(chave_linha(resultado), resultado)
+
+    todas_linhas = list(linhas_por_chave.values())
+    print(f"{linhas_historico} evento(s) via HISTORICO, {len(todas_linhas) - linhas_historico} evento(s) adicionais via rede de seguranca (aba principal).", file=sys.stderr)
 
     # Salva sempre o CSV completo e atualizado (o deliverable "CSV pra Meta").
     saida_csv = transformador.gerar_csv(todas_linhas)
