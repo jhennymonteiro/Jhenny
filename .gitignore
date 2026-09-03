@@ -1,0 +1,4 @@
+google_ads_mcp/google-ads.yaml
+.env
+__pycache__/
+*.pyc
