@@ -81,10 +81,42 @@ aparecerem.
 
 ## Ferramentas disponiveis
 
+O escopo OAuth usado (`adwords`) ja autoriza leitura e escrita completas na
+conta — as ferramentas abaixo cobrem o ciclo de gerenciamento de ponta a
+ponta. Qualquer relatorio ou listagem que nao esteja aqui pode ser feito com
+`run_gaql_query`.
+
+**Contas e relatorios**
 - `list_accessible_customers()` — lista os IDs de contas acessiveis.
 - `run_gaql_query(customer_id, query)` — roda qualquer query GAQL.
-- `list_campaigns(customer_id)` — lista campanhas (id, nome, status).
-- `get_campaign_performance(customer_id, last_n_days=7)` — metricas por
-  campanha.
-- `set_campaign_status(customer_id, campaign_id, status)` — ativa
-  (`ENABLED`) ou pausa (`PAUSED`) uma campanha.
+
+**Orcamentos**
+- `list_campaign_budgets(customer_id)`
+- `create_campaign_budget(customer_id, name, amount_micros)`
+- `update_campaign_budget(customer_id, budget_id, amount_micros)`
+
+**Campanhas**
+- `list_campaigns(customer_id)`
+- `get_campaign_performance(customer_id, last_n_days=7)`
+- `create_search_campaign(customer_id, name, campaign_budget_resource_name, bidding_strategy, status)`
+- `update_campaign(customer_id, campaign_id, name=None, status=None)`
+- `set_campaign_status(customer_id, campaign_id, status)` — `ENABLED`,
+  `PAUSED` ou `REMOVED` (equivale a excluir).
+
+**Grupos de anuncios**
+- `list_ad_groups(customer_id, campaign_id=None)`
+- `create_ad_group(customer_id, campaign_id, name, cpc_bid_micros=None, status="ENABLED")`
+- `update_ad_group(customer_id, ad_group_id, name=None, status=None, cpc_bid_micros=None)`
+
+**Palavras-chave**
+- `list_keywords(customer_id, ad_group_id=None)`
+- `add_keywords(customer_id, ad_group_id, keywords, cpc_bid_micros=None)`
+- `update_keyword_status(customer_id, criterion_resource_name, status)`
+
+**Anuncios**
+- `list_ads(customer_id, ad_group_id=None)`
+- `create_responsive_search_ad(customer_id, ad_group_id, headlines, descriptions, final_urls)`
+- `update_ad_status(customer_id, ad_group_ad_resource_name, status)`
+
+Campanhas e anuncios novos sao criados como `PAUSED` por padrao — ative
+manualmente (`set_campaign_status` / `update_ad_status`) depois de revisar.
