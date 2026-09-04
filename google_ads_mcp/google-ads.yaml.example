@@ -1,0 +1,10 @@
+# Copie este arquivo para google-ads.yaml (fora do controle de versao) e
+# preencha com as suas credenciais. Nunca faca commit do google-ads.yaml real.
+developer_token: "SEU_DEVELOPER_TOKEN"
+client_id: "SEU_CLIENT_ID.apps.googleusercontent.com"
+client_secret: "SEU_CLIENT_SECRET"
+refresh_token: "SEU_REFRESH_TOKEN"
+# Obrigatorio somente se voce acessa contas de anuncio atraves de uma conta
+# de gerente (MCC). Caso contrario, remova esta linha.
+login_customer_id: "1234567890"
+use_proto_plus: true
